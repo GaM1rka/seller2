@@ -1,6 +1,20 @@
 package data
 
-// Порядок отображения ниш в меню (видимые названия)
+type RefItem struct {
+	FromChatID int64
+	MessageID  int
+}
+
+// Теперь у ниши есть Gif (сообщение в канале), вместо Dir/локального файла.
+type NicheDef struct {
+	VisibleTitle string
+	Emoji        string
+	CaptionWord  string
+	Gif          RefItem   // ← откуда копируем гифку
+	Posts        []RefItem // «референсы»
+}
+
+// Порядок отображения ниш
 var NicheOrder = []string{
 	"Автомобили",
 	"Недвижимость",
@@ -9,24 +23,12 @@ var NicheOrder = []string{
 	"Бренды",
 }
 
-type RefItem struct {
-	FromChatID int64
-	MessageID  int
-}
-
-// Ключи: brands, cafe, cars, immovables, services (совпадает с папками в /video)
-var Niches = map[string]struct {
-	VisibleTitle string // название в меню
-	Emoji        string
-	CaptionWord  string // первое слово в подписи ("недвижимость", "авто", ...)
-	Dir          string // папка с гифкой
-	Posts        []RefItem
-}{
+var Niches = map[string]NicheDef{
 	"brands": {
 		VisibleTitle: "Бренды",
 		Emoji:        "🏷️",
 		CaptionWord:  "бренды",
-		Dir:          "video/brands",
+		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 33}, // ← твой пост с гифкой
 		Posts: []RefItem{
 			{FromChatID: -1003212181419, MessageID: 25},
 			{FromChatID: -1003212181419, MessageID: 19},
@@ -37,7 +39,7 @@ var Niches = map[string]struct {
 		VisibleTitle: "Кофейни/Кондитерские",
 		Emoji:        "☕",
 		CaptionWord:  "кофейни/кондитерские",
-		Dir:          "video/cafe",
+		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 31},
 		Posts: []RefItem{
 			{FromChatID: -1003212181419, MessageID: 21},
 			{FromChatID: -1003212181419, MessageID: 12},
@@ -48,7 +50,7 @@ var Niches = map[string]struct {
 		VisibleTitle: "Автомобили",
 		Emoji:        "🚗",
 		CaptionWord:  "авто",
-		Dir:          "video/cars",
+		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 29},
 		Posts: []RefItem{
 			{FromChatID: -1003212181419, MessageID: 26},
 			{FromChatID: -1003212181419, MessageID: 22},
@@ -59,7 +61,7 @@ var Niches = map[string]struct {
 		VisibleTitle: "Недвижимость",
 		Emoji:        "🏠",
 		CaptionWord:  "недвижимость",
-		Dir:          "video/immovables",
+		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 30},
 		Posts: []RefItem{
 			{FromChatID: -1003212181419, MessageID: 24},
 			{FromChatID: -1003212181419, MessageID: 15},
@@ -70,7 +72,7 @@ var Niches = map[string]struct {
 		VisibleTitle: "Услуги",
 		Emoji:        "🧰",
 		CaptionWord:  "услуги",
-		Dir:          "video/services",
+		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 32},
 		Posts: []RefItem{
 			{FromChatID: -1003212181419, MessageID: 23},
 			{FromChatID: -1003212181419, MessageID: 17},

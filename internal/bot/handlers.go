@@ -3,7 +3,6 @@ package bot
 import (
 	"fmt"
 	"log"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -63,13 +62,16 @@ func (h *Handler) onCallback(q *tgbotapi.CallbackQuery) {
 	dataStr := q.Data
 	switch {
 	case dataStr == cbMenu:
-		h.editToMenu(q)
+		h.sendWelcome(q.Message.Chat.ID)
+
 	case strings.HasPrefix(dataStr, cbNichePrefix):
 		key := strings.TrimPrefix(dataStr, cbNichePrefix)
 		h.sendNicheGif(q.Message.Chat.ID, key)
+
 	case strings.HasPrefix(dataStr, cbRefsPrefix):
 		key := strings.TrimPrefix(dataStr, cbRefsPrefix)
 		h.sendRefsFlow(q.Message.Chat.ID, key)
+
 	case strings.HasPrefix(dataStr, cbHowPrefix):
 		key := strings.TrimPrefix(dataStr, cbHowPrefix)
 		h.sendHowFlow(q.Message.Chat.ID, key)
@@ -86,23 +88,20 @@ func (h *Handler) answer(q *tgbotapi.CallbackQuery) error {
 // -------- UI builders ----------
 
 func (h *Handler) menuKeyboard() tgbotapi.InlineKeyboardMarkup {
-	rows := [][]tgbotapi.InlineKeyboardButton{}
-	for _, visible := range data.NicheOrder {
-		key := data.NameToKey[visible]
-		btn := tgbotapi.NewInlineKeyboardButtonData(visible, cbNichePrefix+key)
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(btn))
+	rows := [][]tgbotapi.InlineKeyboardButton{
+		{tgbotapi.NewInlineKeyboardButtonData("Автомобили", cbNichePrefix+"cars")},
+		{tgbotapi.NewInlineKeyboardButtonData("Недвижимость", cbNichePrefix+"immovables")},
+		{tgbotapi.NewInlineKeyboardButtonData("Кофейни/Кондитерские", cbNichePrefix+"cafe")},
+		{tgbotapi.NewInlineKeyboardButtonData("Услуги", cbNichePrefix+"services")},
+		{tgbotapi.NewInlineKeyboardButtonData("Бренды", cbNichePrefix+"brands")},
 	}
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
 
-func (h *Handler) menuMessage(chatID int64, text string) {
-	msg := tgbotapi.NewMessage(chatID, text)
+func (h *Handler) sendWelcome(chatID int64) {
+	msg := tgbotapi.NewMessage(chatID, "Выбери нишу ниже 👇")
 	msg.ReplyMarkup = h.menuKeyboard()
 	h.mustSend(msg)
-}
-
-func (h *Handler) sendWelcome(chatID int64) {
-	h.menuMessage(chatID, messages.Welcome)
 }
 
 func (h *Handler) twoButtonsMenuRefs(key string) tgbotapi.InlineKeyboardMarkup {
@@ -137,13 +136,18 @@ func (h *Handler) sendNicheGif(chatID int64, key string) {
 		h.menuMessage(chatID, "Выбери нишу из меню:")
 		return
 	}
-	gifPath := filepath.Join(n.Dir, "1.gif")
-	caption := messages.NicheGifCaption(n.Emoji, n.CaptionWord)
 
-	anim := tgbotapi.NewAnimation(chatID, tgbotapi.FilePath(gifPath))
-	anim.Caption = caption
-	anim.ReplyMarkup = h.twoButtonsMenuRefs(key)
-	h.mustSend(anim)
+	// Копируем заранее загруженный в канал пост-гифку
+	caption := messages.NicheGifCaption(n.Emoji, n.CaptionWord)
+	copy := tgbotapi.NewCopyMessage(chatID, n.Gif.FromChatID, n.Gif.MessageID)
+	copy.Caption = caption
+	copy.ReplyMarkup = h.twoButtonsMenuRefs(key)
+
+	if _, err := h.bot.API.Request(copy); err != nil {
+		log.Printf("copy gif error: %v", err)
+		h.menuMessage(chatID, "Не удалось отправить примеры. Проверь доступ бота к каналу-источнику.")
+		return
+	}
 }
 
 func (h *Handler) sendRefsFlow(chatID int64, key string) {
