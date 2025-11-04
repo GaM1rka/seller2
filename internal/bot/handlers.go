@@ -1,8 +1,10 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"seller2/internal/store"
 	"strings"
 	"time"
 
@@ -23,12 +25,16 @@ const (
 )
 
 type Handler struct {
-	bot *Bot
-	cfg config.Config
+	bot   *Bot
+	cfg   config.Config
+	store *store.RedisStore
 }
 
 func NewHandler(b *Bot, cfg config.Config) *Handler {
 	return &Handler{bot: b, cfg: cfg}
+}
+func NewHandlerWithStore(b *Bot, cfg config.Config, s *store.RedisStore) *Handler {
+	return &Handler{bot: b, cfg: cfg, store: s}
 }
 
 func (h *Handler) Start() {
@@ -46,23 +52,24 @@ func (h *Handler) Start() {
 
 func (h *Handler) onMessage(m *tgbotapi.Message) {
 	if m.IsCommand() && m.Command() == "start" {
+		// Первый вход — покажем приветствие
 		h.sendWelcome(m.Chat.ID)
 		return
 	}
-	// на «старт» кнопка в UI — это просто /start
 	if m.Text != "" && strings.EqualFold(m.Text, "start") {
 		h.sendWelcome(m.Chat.ID)
 		return
 	}
-	// fallback: покажем меню
-	h.sendWelcome(m.Chat.ID)
+	// По умолчанию просто откроем меню
+	h.sendMenuOnly(m.Chat.ID)
 }
 
 func (h *Handler) onCallback(q *tgbotapi.CallbackQuery) {
 	dataStr := q.Data
 	switch {
 	case dataStr == cbMenu:
-		h.sendWelcome(q.Message.Chat.ID)
+		// По кнопке «меню» всегда отправляем НОВОЕ сообщение с выбором ниш
+		h.sendMenuOnly(q.Message.Chat.ID)
 
 	case strings.HasPrefix(dataStr, cbNichePrefix):
 		key := strings.TrimPrefix(dataStr, cbNichePrefix)
@@ -88,20 +95,30 @@ func (h *Handler) answer(q *tgbotapi.CallbackQuery) error {
 // -------- UI builders ----------
 
 func (h *Handler) menuKeyboard() tgbotapi.InlineKeyboardMarkup {
-	rows := [][]tgbotapi.InlineKeyboardButton{
-		{tgbotapi.NewInlineKeyboardButtonData("Автомобили", cbNichePrefix+"cars")},
-		{tgbotapi.NewInlineKeyboardButtonData("Недвижимость", cbNichePrefix+"immovables")},
-		{tgbotapi.NewInlineKeyboardButtonData("Кофейни/Кондитерские", cbNichePrefix+"cafe")},
-		{tgbotapi.NewInlineKeyboardButtonData("Услуги", cbNichePrefix+"services")},
-		{tgbotapi.NewInlineKeyboardButtonData("Бренды", cbNichePrefix+"brands")},
+	// Кнопки в столбик, как на скрине
+	rows := [][]tgbotapi.InlineKeyboardButton{}
+	for _, visible := range data.NicheOrder {
+		key := data.NameToKey[visible]
+		btn := tgbotapi.NewInlineKeyboardButtonData(visible, cbNichePrefix+key)
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(btn))
 	}
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
 
-func (h *Handler) sendWelcome(chatID int64) {
-	msg := tgbotapi.NewMessage(chatID, "Выбери нишу ниже 👇")
+func (h *Handler) menuMessage(chatID int64, text string) {
+	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ReplyMarkup = h.menuKeyboard()
 	h.mustSend(msg)
+}
+
+func (h *Handler) sendWelcome(chatID int64) {
+	// Приветствие при /start
+	h.menuMessage(chatID, messages.Welcome)
+}
+
+// короткая версия меню — именно её шлём по кнопке «меню»
+func (h *Handler) sendMenuOnly(chatID int64) {
+	h.menuMessage(chatID, "Выбери нишу ниже 👇")
 }
 
 func (h *Handler) twoButtonsMenuRefs(key string) tgbotapi.InlineKeyboardMarkup {
@@ -133,7 +150,7 @@ func (h *Handler) buyKeyboard() tgbotapi.InlineKeyboardMarkup {
 func (h *Handler) sendNicheGif(chatID int64, key string) {
 	n, ok := data.Niches[key]
 	if !ok {
-		h.menuMessage(chatID, "Выбери нишу из меню:")
+		h.sendMenuOnly(chatID)
 		return
 	}
 
@@ -153,7 +170,7 @@ func (h *Handler) sendNicheGif(chatID int64, key string) {
 func (h *Handler) sendRefsFlow(chatID int64, key string) {
 	n, ok := data.Niches[key]
 	if !ok {
-		h.menuMessage(chatID, "Выбери нишу из меню:")
+		h.sendMenuOnly(chatID)
 		return
 	}
 
@@ -196,31 +213,55 @@ func (h *Handler) sendHowFlow(chatID int64, key string) {
 	fw := tgbotapi.NewForward(chatID, lessonChatID, lessonMsgID)
 	msg := h.mustSend(fw)
 
-	// через минуту удаляем и шлём оффер
-	time.AfterFunc(time.Minute, func() {
-		// удалить урок
-		del := tgbotapi.DeleteMessageConfig{
-			ChatID:    chatID,
-			MessageID: msg.MessageID,
-		}
-		if _, err := h.bot.API.Request(del); err != nil {
-			log.Println("delete lesson:", err)
-		}
-		// оффер
-		txt := fmt.Sprintf(messages.Sales, h.cfg.PriceText)
-		m := tgbotapi.NewMessage(chatID, txt)
-		m.ReplyMarkup = h.buyKeyboard()
-		h.mustSend(m)
-	})
+	// планируем удаление через 24 часа в Redis
+	if h.store != nil {
+		_ = h.store.ScheduleDeletion(context.Background(), chatID, msg.MessageID, time.Now().Add(time.Minute))
+	} else {
+		// fallback: локальный таймер (если нет Redis)
+		time.AfterFunc(time.Minute, func() {
+			h.deleteLessonAndOffer(chatID, msg.MessageID)
+		})
+	}
 }
 
-func (h *Handler) editToMenu(q *tgbotapi.CallbackQuery) {
-	edit := tgbotapi.NewEditMessageTextAndMarkup(
-		q.Message.Chat.ID, q.Message.MessageID,
-		"Выбери нишу ниже 👇",
-		h.menuKeyboard(),
-	)
-	h.mustRequest(edit)
+func (h *Handler) deleteLessonAndOffer(chatID int64, msgID int) {
+	// удалить урок
+	del := tgbotapi.DeleteMessageConfig{ChatID: chatID, MessageID: msgID}
+	if _, err := h.bot.API.Request(del); err != nil {
+		log.Println("delete lesson:", err)
+	}
+	// оффер
+	txt := fmt.Sprintf(messages.Sales, h.cfg.PriceText)
+	m := tgbotapi.NewMessage(chatID, txt)
+	m.ReplyMarkup = h.buyKeyboard()
+	h.mustSend(m)
+}
+
+func (h *Handler) RunDeletionScheduler(ctx context.Context) {
+	if h.store == nil {
+		return
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			tasks, err := h.store.FetchDue(ctx, time.Now(), 100)
+			if err != nil {
+				if err.Error() != "redis: nil" {
+					log.Println("scheduler fetch:", err)
+				}
+				continue
+			}
+			for _, t := range tasks {
+				h.deleteLessonAndOffer(t.ChatID, t.MsgID)
+				// если хочется ретраев — оборачиваем try/catch и при ошибке перекидываем задачу назад в Redis на +1 минуту
+			}
+		}
+	}
 }
 
 // -------- helpers ----------
