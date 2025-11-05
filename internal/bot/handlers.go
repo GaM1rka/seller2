@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"seller2/internal/store"
@@ -21,7 +22,7 @@ const (
 	cbMenu        = "menu"   // меню
 	cbHowPrefix   = "how:"   // how:<key>
 	lessonChatID  = int64(-1003212181419)
-	lessonMsgID   = 28
+	lessonMsgID   = 34
 )
 
 type Handler struct {
@@ -73,7 +74,7 @@ func (h *Handler) onCallback(q *tgbotapi.CallbackQuery) {
 
 	case strings.HasPrefix(dataStr, cbNichePrefix):
 		key := strings.TrimPrefix(dataStr, cbNichePrefix)
-		h.sendNicheGif(q.Message.Chat.ID, key)
+		h.sendNicheFlow(q.Message.Chat.ID, key)
 
 	case strings.HasPrefix(dataStr, cbRefsPrefix):
 		key := strings.TrimPrefix(dataStr, cbRefsPrefix)
@@ -121,11 +122,10 @@ func (h *Handler) sendMenuOnly(chatID int64) {
 	h.menuMessage(chatID, "Выбери нишу ниже 👇")
 }
 
-func (h *Handler) twoButtonsMenuRefs(key string) tgbotapi.InlineKeyboardMarkup {
+func (h *Handler) oneButtonMenu() tgbotapi.InlineKeyboardMarkup {
 	btnMenu := tgbotapi.NewInlineKeyboardButtonData("меню", cbMenu)
-	btnRefs := tgbotapi.NewInlineKeyboardButtonData("референсы", cbRefsPrefix+key)
 	return tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(btnMenu, btnRefs),
+		tgbotapi.NewInlineKeyboardRow(btnMenu),
 	)
 }
 
@@ -147,24 +147,41 @@ func (h *Handler) buyKeyboard() tgbotapi.InlineKeyboardMarkup {
 
 // -------- steps ----------
 
-func (h *Handler) sendNicheGif(chatID int64, key string) {
+// При выборе ниши: гифка + подпись + только «меню», затем сразу 3 референса,
+// а через минуту — CTA «Показать, как это делается» / «меню».
+func (h *Handler) sendNicheFlow(chatID int64, key string) {
 	n, ok := data.Niches[key]
 	if !ok {
 		h.sendMenuOnly(chatID)
 		return
 	}
 
-	// Копируем заранее загруженный в канал пост-гифку
+	// 1) Гиф-пост с кастомной подписью и ТОЛЬКО «меню»
 	caption := messages.NicheGifCaption(n.Emoji, n.CaptionWord)
 	copy := tgbotapi.NewCopyMessage(chatID, n.Gif.FromChatID, n.Gif.MessageID)
 	copy.Caption = caption
-	copy.ReplyMarkup = h.twoButtonsMenuRefs(key)
-
+	copy.ReplyMarkup = h.oneButtonMenu()
 	if _, err := h.bot.API.Request(copy); err != nil {
 		log.Printf("copy gif error: %v", err)
 		h.menuMessage(chatID, "Не удалось отправить примеры. Проверь доступ бота к каналу-источнику.")
 		return
 	}
+
+	// 2) Сразу шлём 3 референса
+	for _, p := range n.Posts {
+		cp := tgbotapi.NewCopyMessage(chatID, p.FromChatID, p.MessageID)
+		if _, err := h.bot.API.Request(cp); err != nil {
+			log.Printf("copy ref error chat=%d msg=%d: %v", p.FromChatID, p.MessageID, err)
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	// 3) Через минуту — CTA «Показать, как это делается»
+	time.AfterFunc(time.Minute, func() {
+		msg := tgbotapi.NewMessage(chatID, messages.AfterRefs)
+		msg.ReplyMarkup = h.twoButtonsHowMenu(key)
+		h.mustSend(msg)
+	})
 }
 
 func (h *Handler) sendRefsFlow(chatID int64, key string) {
@@ -209,28 +226,48 @@ func (h *Handler) checkSourceAccess(fromChatID int64) error {
 }
 
 func (h *Handler) sendHowFlow(chatID int64, key string) {
-	// форвардим урок
-	fw := tgbotapi.NewForward(chatID, lessonChatID, lessonMsgID)
-	msg := h.mustSend(fw)
+	// копируем урок без "forwarded from"
+	copy := tgbotapi.NewCopyMessage(chatID, lessonChatID, lessonMsgID)
+	resp, err := h.bot.API.Request(copy)
+	if err != nil {
+		log.Println("copy lesson error:", err)
+		return
+	}
+	var mid tgbotapi.MessageID
+	if err := json.Unmarshal(resp.Result, &mid); err != nil {
+		log.Println("decode message_id error:", err)
+		return
+	}
+	log.Printf("lesson copied: chat=%d msg_id=%d", chatID, mid.MessageID)
 
-	// планируем удаление через 24 часа в Redis
+	// расписание
+	offerAt := time.Now().Add(time.Minute)      // оффер через 15 минут
+	deleteAt := time.Now().Add(2 * time.Minute) // удаление через 24 часа
+
 	if h.store != nil {
-		_ = h.store.ScheduleDeletion(context.Background(), chatID, msg.MessageID, time.Now().Add(time.Minute))
+		if err := h.store.ScheduleOffer(context.Background(), chatID, mid.MessageID, offerAt); err != nil {
+			log.Println("ScheduleOffer error, fallback to AfterFunc:", err)
+			time.AfterFunc(time.Until(offerAt), func() { h.sendOffer(chatID) })
+		}
+		if err := h.store.ScheduleDeletion(context.Background(), chatID, mid.MessageID, deleteAt); err != nil {
+			log.Println("ScheduleDeletion error, fallback to AfterFunc:", err)
+			time.AfterFunc(time.Until(deleteAt), func() { h.deleteLesson(chatID, mid.MessageID) })
+		}
 	} else {
-		// fallback: локальный таймер (если нет Redis)
-		time.AfterFunc(time.Minute, func() {
-			h.deleteLessonAndOffer(chatID, msg.MessageID)
-		})
+		// фоллбэки без Redis
+		time.AfterFunc(time.Until(offerAt), func() { h.sendOffer(chatID) })
+		time.AfterFunc(time.Until(deleteAt), func() { h.deleteLesson(chatID, mid.MessageID) })
 	}
 }
 
-func (h *Handler) deleteLessonAndOffer(chatID int64, msgID int) {
-	// удалить урок
+func (h *Handler) deleteLesson(chatID int64, msgID int) {
 	del := tgbotapi.DeleteMessageConfig{ChatID: chatID, MessageID: msgID}
 	if _, err := h.bot.API.Request(del); err != nil {
 		log.Println("delete lesson:", err)
 	}
-	// оффер
+}
+
+func (h *Handler) sendOffer(chatID int64) {
 	txt := fmt.Sprintf(messages.Sales, h.cfg.PriceText)
 	m := tgbotapi.NewMessage(chatID, txt)
 	m.ReplyMarkup = h.buyKeyboard()
@@ -241,7 +278,7 @@ func (h *Handler) RunDeletionScheduler(ctx context.Context) {
 	if h.store == nil {
 		return
 	}
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(1 * time.Second) // быстрее для теста; в проде можно 5с
 	defer ticker.Stop()
 
 	for {
@@ -249,16 +286,23 @@ func (h *Handler) RunDeletionScheduler(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			tasks, err := h.store.FetchDue(ctx, time.Now(), 100)
-			if err != nil {
-				if err.Error() != "redis: nil" {
-					log.Println("scheduler fetch:", err)
+			now := time.Now()
+
+			// 1) офферы
+			offers, err := h.store.FetchDueOffers(ctx, now, 100)
+			if err == nil {
+				for _, t := range offers {
+					// msgID не нужен для оффера — важен chatID
+					h.sendOffer(t.ChatID)
 				}
-				continue
 			}
-			for _, t := range tasks {
-				h.deleteLessonAndOffer(t.ChatID, t.MsgID)
-				// если хочется ретраев — оборачиваем try/catch и при ошибке перекидываем задачу назад в Redis на +1 минуту
+
+			// 2) удаления
+			dels, err := h.store.FetchDueDeletions(ctx, now, 100)
+			if err == nil {
+				for _, t := range dels {
+					h.deleteLesson(t.ChatID, t.MsgID) // если хочешь «оффер после удаления» — оставь; или замени на просто delete
+				}
 			}
 		}
 	}

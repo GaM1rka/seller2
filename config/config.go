@@ -22,7 +22,7 @@ func Load() Config {
 	_ = godotenv.Load()
 	c := Config{
 		BotToken:   getenv("TELEGRAM_BOT_TOKEN", ""), // ← читаем по имени
-		PriceText:  getenv("PRICE_TEXT", "9 900 ₽"),
+		PriceText:  getenv("PRICE_TEXT", "10 000 ₽"),
 		TributeURL: getenv("TRIBUTE_URL", "https://pay.tribute.to/your-product"),
 
 		RedisAddr: getenv("REDIS_ADDR", "127.0.0.1:6380"),
