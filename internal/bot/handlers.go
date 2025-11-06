@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"seller2/internal/store"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,12 +18,15 @@ import (
 )
 
 const (
-	cbNichePrefix = "niche:" // niche:<key>
-	cbRefsPrefix  = "refs:"  // refs:<key>
-	cbMenu        = "menu"   // меню
-	cbHowPrefix   = "how:"   // how:<key>
+	cbNichePrefix = "niche:"    // niche:<key>
+	cbRefsPrefix  = "refs:"     // refs:<key>
+	cbMoreRefs    = "morerefs:" // morerefs:<key>:<index>
+	cbMenu        = "menu"      // меню
+	cbHowPrefix   = "how:"      // how:<key>
 	lessonChatID  = int64(-1003212181419)
 	lessonMsgID   = 34
+	salesChatID   = int64(-1003212181419) // тот же канал
+	salesMsgID    = 41                    // ID продающего сообщения
 )
 
 type Handler struct {
@@ -65,28 +69,6 @@ func (h *Handler) onMessage(m *tgbotapi.Message) {
 	h.sendMenuOnly(m.Chat.ID)
 }
 
-func (h *Handler) onCallback(q *tgbotapi.CallbackQuery) {
-	dataStr := q.Data
-	switch {
-	case dataStr == cbMenu:
-		// По кнопке «меню» всегда отправляем НОВОЕ сообщение с выбором ниш
-		h.sendMenuOnly(q.Message.Chat.ID)
-
-	case strings.HasPrefix(dataStr, cbNichePrefix):
-		key := strings.TrimPrefix(dataStr, cbNichePrefix)
-		h.sendNicheFlow(q.Message.Chat.ID, key)
-
-	case strings.HasPrefix(dataStr, cbRefsPrefix):
-		key := strings.TrimPrefix(dataStr, cbRefsPrefix)
-		h.sendRefsFlow(q.Message.Chat.ID, key)
-
-	case strings.HasPrefix(dataStr, cbHowPrefix):
-		key := strings.TrimPrefix(dataStr, cbHowPrefix)
-		h.sendHowFlow(q.Message.Chat.ID, key)
-	}
-	_ = h.answer(q)
-}
-
 func (h *Handler) answer(q *tgbotapi.CallbackQuery) error {
 	cfg := tgbotapi.NewCallback(q.ID, "")
 	_, err := h.bot.API.Request(cfg)
@@ -119,7 +101,7 @@ func (h *Handler) sendWelcome(chatID int64) {
 
 // короткая версия меню — именно её шлём по кнопке «меню»
 func (h *Handler) sendMenuOnly(chatID int64) {
-	h.menuMessage(chatID, "Выбери нишу ниже 👇")
+	h.menuMessage(chatID, "выбери нишу ниже 👇")
 }
 
 func (h *Handler) oneButtonMenu() tgbotapi.InlineKeyboardMarkup {
@@ -130,7 +112,7 @@ func (h *Handler) oneButtonMenu() tgbotapi.InlineKeyboardMarkup {
 }
 
 func (h *Handler) twoButtonsHowMenu(key string) tgbotapi.InlineKeyboardMarkup {
-	btnHow := tgbotapi.NewInlineKeyboardButtonData("🎥 Показать, как это делается", cbHowPrefix+key)
+	btnHow := tgbotapi.NewInlineKeyboardButtonData("🎥 показать, как это делается", cbHowPrefix+key)
 	btnMenu := tgbotapi.NewInlineKeyboardButtonData("меню", cbMenu)
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(btnHow),
@@ -139,7 +121,7 @@ func (h *Handler) twoButtonsHowMenu(key string) tgbotapi.InlineKeyboardMarkup {
 }
 
 func (h *Handler) buyKeyboard() tgbotapi.InlineKeyboardMarkup {
-	btn := tgbotapi.NewInlineKeyboardButtonURL("«Взять доступ»", h.cfg.TributeURL)
+	btn := tgbotapi.NewInlineKeyboardButtonURL("«взять доступ»", h.cfg.TributeURL)
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(btn),
 	)
@@ -147,8 +129,6 @@ func (h *Handler) buyKeyboard() tgbotapi.InlineKeyboardMarkup {
 
 // -------- steps ----------
 
-// При выборе ниши: гифка + подпись + только «меню», затем сразу 3 референса,
-// а через минуту — CTA «Показать, как это делается» / «меню».
 func (h *Handler) sendNicheFlow(chatID int64, key string) {
 	n, ok := data.Niches[key]
 	if !ok {
@@ -163,59 +143,128 @@ func (h *Handler) sendNicheFlow(chatID int64, key string) {
 	copy.ReplyMarkup = h.oneButtonMenu()
 	if _, err := h.bot.API.Request(copy); err != nil {
 		log.Printf("copy gif error: %v", err)
-		h.menuMessage(chatID, "Не удалось отправить примеры. Проверь доступ бота к каналу-источнику.")
+		h.menuMessage(chatID, "не удалось отправить примеры. проверь доступ бота к каналу-источнику.")
 		return
 	}
 
-	// 2) Сразу шлём 3 референса
-	for _, p := range n.Posts {
-		cp := tgbotapi.NewCopyMessage(chatID, p.FromChatID, p.MessageID)
-		if _, err := h.bot.API.Request(cp); err != nil {
-			log.Printf("copy ref error chat=%d msg=%d: %v", p.FromChatID, p.MessageID, err)
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-
-	// 3) Через минуту — CTA «Показать, как это делается»
-	time.AfterFunc(time.Minute, func() {
-		msg := tgbotapi.NewMessage(chatID, messages.AfterRefs)
-		msg.ReplyMarkup = h.twoButtonsHowMenu(key)
-		h.mustSend(msg)
-	})
+	// 2) Отправляем первый референс с кнопкой "еще референс"
+	h.sendNextRef(chatID, key, 0)
 }
 
+// sendNextRef отправляет следующий референс (по индексу)
+func (h *Handler) sendNextRef(chatID int64, key string, index int) {
+	n, ok := data.Niches[key]
+	if !ok || index >= len(n.Posts) {
+		return
+	}
+
+	// Отправляем текущий референс
+	p := n.Posts[index]
+	copy := tgbotapi.NewCopyMessage(chatID, p.FromChatID, p.MessageID)
+
+	// Добавляем клавиатуру с кнопками
+	copy.ReplyMarkup = h.refsKeyboard(key, index, len(n.Posts))
+
+	if _, err := h.bot.API.Request(copy); err != nil {
+		log.Printf("copy ref error chat=%d msg=%d: %v", p.FromChatID, p.MessageID, err)
+		// Если ошибка, все равно предлагаем следующий
+		if index+1 < len(n.Posts) {
+			h.sendNextRef(chatID, key, index+1)
+		}
+		return
+	}
+
+	time.Sleep(150 * time.Millisecond)
+}
+
+// refsKeyboard создает клавиатуру для референсов
+func (h *Handler) refsKeyboard(key string, currentIndex int, total int) tgbotapi.InlineKeyboardMarkup {
+	rows := [][]tgbotapi.InlineKeyboardButton{}
+
+	// Если есть еще референсы, показываем кнопку "еще референс"
+	if currentIndex+1 < total {
+		btnMore := tgbotapi.NewInlineKeyboardButtonData(
+			"еще референс",
+			fmt.Sprintf("%s%s:%d", cbMoreRefs, key, currentIndex+1),
+		)
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(btnMore))
+	}
+
+	// Всегда показываем кнопку "меню"
+	btnMenu := tgbotapi.NewInlineKeyboardButtonData("меню", cbMenu)
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(btnMenu))
+
+	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+// Обработка callback'ов (добавляем в switch)
+func (h *Handler) onCallback(q *tgbotapi.CallbackQuery) {
+	dataStr := q.Data
+	switch {
+	case dataStr == cbMenu:
+		h.sendMenuOnly(q.Message.Chat.ID)
+
+	case strings.HasPrefix(dataStr, cbNichePrefix):
+		key := strings.TrimPrefix(dataStr, cbNichePrefix)
+		h.sendNicheFlow(q.Message.Chat.ID, key)
+
+	case strings.HasPrefix(dataStr, cbRefsPrefix):
+		key := strings.TrimPrefix(dataStr, cbRefsPrefix)
+		h.sendRefsFlow(q.Message.Chat.ID, key)
+
+	case strings.HasPrefix(dataStr, cbMoreRefs):
+		// Обработка "еще референс": morerefs:<key>:<index>
+		parts := strings.Split(strings.TrimPrefix(dataStr, cbMoreRefs), ":")
+		if len(parts) == 2 {
+			key := parts[0]
+			index, err := strconv.Atoi(parts[1])
+			if err == nil {
+				h.sendNextRef(q.Message.Chat.ID, key, index)
+
+				// Если это был последний референс, отправляем финальное сообщение
+				n, ok := data.Niches[key]
+				if ok && index == len(n.Posts)-1 {
+					time.AfterFunc(500*time.Millisecond, func() {
+						h.sendFinalMessage(q.Message.Chat.ID, key)
+					})
+				}
+			}
+		}
+
+	case strings.HasPrefix(dataStr, cbHowPrefix):
+		key := strings.TrimPrefix(dataStr, cbHowPrefix)
+		h.sendHowFlow(q.Message.Chat.ID, key)
+	}
+	_ = h.answer(q)
+}
+
+// sendFinalMessage отправляет финальное сообщение после всех референсов
+func (h *Handler) sendFinalMessage(chatID int64, key string) {
+	msg := tgbotapi.NewMessage(chatID, messages.AfterRefs)
+	msg.ReplyMarkup = h.twoButtonsHowMenu(key)
+	h.mustSend(msg)
+}
+
+// Обновляем sendRefsFlow для использования новой логики
 func (h *Handler) sendRefsFlow(chatID int64, key string) {
+	// Проверка доступа к источнику
 	n, ok := data.Niches[key]
 	if !ok {
 		h.sendMenuOnly(chatID)
 		return
 	}
 
-	// Проверка доступа к источнику (однократно на ключ)
 	if len(n.Posts) > 0 {
 		from := n.Posts[0].FromChatID
 		if err := h.checkSourceAccess(from); err != nil {
 			log.Printf("no access to source %d: %v", from, err)
-			h.menuMessage(chatID, "Не могу получить референсы (нет доступа к источнику). Проверь, что бот добавлен в канал и история доступна.")
+			h.menuMessage(chatID, "не могу получить референсы (нет доступа к источнику). проверь, что бот добавлен в канал и история доступна.")
 			return
 		}
 	}
 
-	// Копируем 3 поста
-	for _, p := range n.Posts {
-		copy := tgbotapi.NewCopyMessage(chatID, p.FromChatID, p.MessageID)
-		if _, err := h.bot.API.Request(copy); err != nil {
-			log.Printf("copy error chat=%d msg=%d: %v", p.FromChatID, p.MessageID, err)
-		}
-		time.Sleep(150 * time.Millisecond) // маленький троттлинг
-	}
-
-	// Через минуту — CTA
-	time.AfterFunc(time.Minute, func() {
-		msg := tgbotapi.NewMessage(chatID, messages.AfterRefs)
-		msg.ReplyMarkup = h.twoButtonsHowMenu(key)
-		h.mustSend(msg)
-	})
+	// Запускаем отправку первого референса
+	h.sendNextRef(chatID, key, 0)
 }
 
 func (h *Handler) checkSourceAccess(fromChatID int64) error {
@@ -268,10 +317,14 @@ func (h *Handler) deleteLesson(chatID int64, msgID int) {
 }
 
 func (h *Handler) sendOffer(chatID int64) {
-	txt := fmt.Sprintf(messages.Sales, h.cfg.PriceText)
-	m := tgbotapi.NewMessage(chatID, txt)
-	m.ReplyMarkup = h.buyKeyboard()
-	h.mustSend(m)
+	// Копируем продающее сообщение из канала и добавляем кнопку
+	copy := tgbotapi.NewCopyMessage(chatID, salesChatID, salesMsgID)
+	copy.ReplyMarkup = h.buyKeyboard()
+
+	if _, err := h.bot.API.Request(copy); err != nil {
+		log.Printf("copy sales message error: %v", err)
+		// Просто логируем ошибку, не отправляем фоллбэк
+	}
 }
 
 func (h *Handler) RunDeletionScheduler(ctx context.Context) {

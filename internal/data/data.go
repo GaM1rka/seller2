@@ -16,19 +16,19 @@ type NicheDef struct {
 
 // Порядок отображения ниш
 var NicheOrder = []string{
-	"Автомобили",
-	"Недвижимость",
-	"Кофейни/Кондитерские",
-	"Услуги",
-	"Бренды",
+	"автомобили",
+	"недвижимость",
+	"кофейни/кондитерские",
+	"услуги",
+	"бренды",
 }
 
 var Niches = map[string]NicheDef{
 	"brands": {
-		VisibleTitle: "Бренды",
+		VisibleTitle: "бренды",
 		Emoji:        "🏷️",
 		CaptionWord:  "бренды",
-		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 33}, // ← твой пост с гифкой
+		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 39}, // ← твой пост с гифкой
 		Posts: []RefItem{
 			{FromChatID: -1003212181419, MessageID: 25},
 			{FromChatID: -1003212181419, MessageID: 19},
@@ -36,10 +36,10 @@ var Niches = map[string]NicheDef{
 		},
 	},
 	"cafe": {
-		VisibleTitle: "Кофейни/Кондитерские",
+		VisibleTitle: "кофейни/кондитерские",
 		Emoji:        "☕",
 		CaptionWord:  "кофейни/кондитерские",
-		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 31},
+		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 37},
 		Posts: []RefItem{
 			{FromChatID: -1003212181419, MessageID: 21},
 			{FromChatID: -1003212181419, MessageID: 12},
@@ -47,10 +47,10 @@ var Niches = map[string]NicheDef{
 		},
 	},
 	"cars": {
-		VisibleTitle: "Автомобили",
+		VisibleTitle: "автомобили",
 		Emoji:        "🚗",
 		CaptionWord:  "авто",
-		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 29},
+		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 35},
 		Posts: []RefItem{
 			{FromChatID: -1003212181419, MessageID: 26},
 			{FromChatID: -1003212181419, MessageID: 22},
@@ -58,10 +58,10 @@ var Niches = map[string]NicheDef{
 		},
 	},
 	"immovables": {
-		VisibleTitle: "Недвижимость",
+		VisibleTitle: "недвижимость",
 		Emoji:        "🏠",
 		CaptionWord:  "недвижимость",
-		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 30},
+		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 36},
 		Posts: []RefItem{
 			{FromChatID: -1003212181419, MessageID: 24},
 			{FromChatID: -1003212181419, MessageID: 15},
@@ -69,10 +69,10 @@ var Niches = map[string]NicheDef{
 		},
 	},
 	"services": {
-		VisibleTitle: "Услуги",
+		VisibleTitle: "услуги",
 		Emoji:        "🧰",
 		CaptionWord:  "услуги",
-		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 32},
+		Gif:          RefItem{FromChatID: -1003212181419, MessageID: 38},
 		Posts: []RefItem{
 			{FromChatID: -1003212181419, MessageID: 23},
 			{FromChatID: -1003212181419, MessageID: 17},
@@ -83,9 +83,9 @@ var Niches = map[string]NicheDef{
 
 // соответствие «видимое имя» → «ключ»
 var NameToKey = map[string]string{
-	"Автомобили":           "cars",
-	"Недвижимость":         "immovables",
-	"Кофейни/Кондитерские": "cafe",
-	"Услуги":               "services",
-	"Бренды":               "brands",
+	"автомобили":           "cars",
+	"недвижимость":         "immovables",
+	"кофейни/кондитерские": "cafe",
+	"услуги":               "services",
+	"бренды":               "brands",
 }
