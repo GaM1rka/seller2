@@ -1,4 +1,3 @@
-version: "3.9"
 services:
   redis:
     image: redis:7-alpine
@@ -6,12 +5,24 @@ services:
     ports:
       - "6380:6379"
     volumes:
-      - redis-data:/data
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 5 
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASS=your_redis_password
+      - REDIS_DB=0
+      - BOT_TOKEN=your_bot_token
+      - DEBUG=0
+    depends_on:
+      - redis
 
 volumes:
-  redis-data:
+  redis_data:
