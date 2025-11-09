@@ -290,8 +290,8 @@ func (h *Handler) sendHowFlow(chatID int64, key string) {
 	log.Printf("lesson copied: chat=%d msg_id=%d", chatID, mid.MessageID)
 
 	// расписание
-	offerAt := time.Now().Add(time.Minute)      // оффер через 15 минут
-	deleteAt := time.Now().Add(2 * time.Minute) // удаление через 24 часа
+	offerAt := time.Now().Add(15 * time.Minute) // оффер через 15 минут
+	deleteAt := time.Now().Add(24 * time.Hour)  // удаление через 24 часа
 
 	if h.store != nil {
 		if err := h.store.ScheduleOffer(context.Background(), chatID, mid.MessageID, offerAt); err != nil {
